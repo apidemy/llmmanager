@@ -1,97 +1,78 @@
 // llm-access-service/frontend/src/utils/firestore.js
-import { firestore } from '../firebaseConfig';
-import firebase from 'firebase/app';
-import 'firebase/firestore';
+import { db } from '../firebaseConfig'; // Import your Firestore instance
 
-/**
- * Adds a new user document to the 'users' collection.
- * @param {string} userId - The Firebase Authentication user ID.
- * @param {string} email - The user's email address.
- * @param {string} apiKey - The LiteLLM virtual API key associated with the user.
- * @returns {Promise<void>}
- */
-export const createUserProfile = async (userId, email, apiKey) => {
-  try {
-    await firestore.collection('users').doc(userId).set({
-      userId: userId,
-      email: email,
-      apiKey: apiKey,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    console.log("User profile created successfully!");
-  } catch (error) {
-    console.error("Error creating user profile: ", error);
-    throw error; // Re-throw the error for handling in the calling component
-  }
-};
+// Function to create a user document in Firestore upon successful signup
+export const createUserProfile = async (userId, email) => {
+    try {
+        const userRef = db.collection('users').doc(userId);
+        const doc = await userRef.get();
 
-/**
- * Retrieves a user document from the 'users' collection.
- * @param {string} userId - The Firebase Authentication user ID.
- * @returns {Promise<object|null>} - The user profile data or null if not found.
- */
-export const getUserProfile = async (userId) => {
-  try {
-    const doc = await firestore.collection('users').doc(userId).get();
-    if (doc.exists) {
-      console.log("User profile data:", doc.data());
-      return doc.data();
-    } else {
-      console.log("No such user profile!");
-      return null;
+        if (!doc.exists) {
+            // Only create if document does not exist
+            await userRef.set({
+                userId: userId,
+                email: email,
+                apiKey: null, // API key will be generated later
+                freeCallsToday: 0, // Initialize free calls
+                lastFreeCallDate: null, // Initialize last free call date
+                balance: 0, // Initialize balance
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            console.log("User profile created successfully for user:", userId);
+        } else {
+             console.log("User profile already exists for user:", userId);
+        }
+
+    } catch (error) {
+        console.error("Error creating user profile:", error);
+        throw error; // Re-throw to be handled by calling code
     }
-  } catch (error) {
-    console.error("Error getting user profile: ", error);
-    throw error; // Re-throw the error
-  }
 };
 
-/**
- * Adds a new billing document to the 'billing' collection.
- * @param {string} userId - The Firebase Authentication user ID.
- * @param {string} model - The name of the LLM model used.
- * @param {number} inputTokens - The number of input tokens used.
- * @param {number} outputTokens - The number of output tokens generated.
- * @param {number} cost - The calculated cost for the usage.
- * @returns {Promise<void>}
- */
-export const addBillingRecord = async (userId, model, inputTokens, outputTokens, cost) => {
-  try {
-    await firestore.collection('billing').add({
-      userId: userId,
-      model: model,
-      inputTokens: inputTokens,
-      outputTokens: outputTokens,
-      cost: cost,
-      timestamp: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    console.log("Billing record added successfully!");
-  } catch (error) {
-    console.error("Error adding billing record: ", error);
-    throw error; // Re-throw the error
-  }
+
+// Function to get a user's profile from Firestore
+export const getUserProfile = async (userId) => {
+    try {
+        const doc = await db.collection('users').doc(userId).get();
+        if (doc.exists) {
+            return { id: doc.id, ...doc.data() };
+        } else {
+            console.log("No such user profile for user:", userId);
+            return null;
+        }
+    } catch (error) {
+        console.error("Error getting user profile:", error);
+        throw error;
+    }
 };
 
-/**
- * Retrieves billing documents for a specific user from the 'billing' collection, ordered by timestamp.
- * @param {string} userId - The Firebase Authentication user ID.
- * @returns {Promise<Array<object>>} - An array of billing records.
- */
+// Function to get billing records for a user
 export const getUserBillingRecords = async (userId) => {
-  try {
-    const snapshot = await firestore.collection('billing')
-      .where('userId', '==', userId)
-      .orderBy('timestamp', 'desc')
-      .get();
+    try {
+        // Ensure db is initialized
+        if (!db) {
+             console.error("Firestore database is not initialized.");
+             return [];
+        }
 
-    const records = [];
-    snapshot.forEach(doc => {
-      records.push({ id: doc.id, ...doc.data() });
-    });
-    console.log("User billing records:", records);
-    return records;
-  } catch (error) {
-    console.error("Error getting billing records: ", error);
-    throw error; // Re-throw the error
-  }
+        const snapshot = await db.collection('billing')
+            .where('user_id', '==', userId)
+            .orderBy('timestamp', 'desc') // Assuming 'timestamp' field exists and is indexed
+            .get();
+
+        const records = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+        return records;
+    } catch (error) {
+        console.error("Error fetching user billing records:", error);
+        // Check if the error is due to missing index and provide guidance
+        if (error.code === 'failed-precondition') {
+             console.error("Firestore Error: You might need to create an index for 'user_id' and 'timestamp' in the 'billing' collection.");
+        }
+        throw error; // Re-throw to be handled by the calling component
+    }
 };
+
+// You would add functions here later to update user balance, etc.

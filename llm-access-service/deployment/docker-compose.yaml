@@ -1,24 +1,111 @@
+# llm-access-service/deployment/docker-compose.yaml
 version: '3.8'
 
 services:
-  litellm:
-    image: ghcr.io/berriai/litellm:main-vla
+  # Frontend Service (React App)
+  frontend:
+    build:
+      context: ../llm-access-service/frontend # Path to your frontend directory
+      dockerfile: Dockerfile.frontend # Assuming you have a Dockerfile for your frontend
     ports:
-      - "4000:4000"
-    volumes:
-      - ./litellm/config.yaml:/app/config.yaml
-      - ./litellm/.env:/.env
-    depends_on:
-      - db
-
-  db:
-    image: postgres:13
-    volumes:
-      - db_data:/var/lib/postgresql/data
+      - "3000:80" # Map host port 3000 to container port 80 (standard web server port)
     environment:
-      POSTGRES_DB: litellm
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: mysecretpassword
+      # Pass Firebase frontend environment variables to the frontend container
+      # These must be prefixed correctly (e.g., REACT_APP_) for tools like Create React App
+      - REACT_APP_FIREBASE_API_KEY=${REACT_APP_FIREBASE_API_KEY}
+      - REACT_APP_FIREBASE_AUTH_DOMAIN=${REACT_APP_FIREBASE_AUTH_DOMAIN}
+      - REACT_APP_FIREBASE_PROJECT_ID=${REACT_APP_FIREBASE_PROJECT_ID}
+      - REACT_APP_FIREBASE_STORAGE_BUCKET=${REACT_APP_FIREBASE_STORAGE_BUCKET}
+      - REACT_APP_FIREBASE_MESSAGING_SENDER_ID=${REACT_APP_FIREBASE_MESSAGING_SENDER_ID}
+      - REACT_APP_FIREBASE_APP_ID=${REACT_APP_FIREBASE_APP_ID}
+      # IMPORTANT: Set the backend API URL for the frontend.
+      # If accessing from browser via host, use host.docker.internal or the host IP/domain
+      # If accessing between containers, use the backend service name (e.g., http://backend:8000)
+      # For local development via host browser accessing frontend on 3000, backend is on host:8000
+      # In production with a reverse proxy, this would be the external domain of your backend
+      # Let's set a placeholder that you MUST update based on your deployment strategy.
+      - REACT_APP_BACKEND_API_URL=http://host.docker.internal:8000 # REPLACE THIS IN PRODUCTION/DIFFERENT SETUPS
+    # volumes: # Optional: Mount frontend source code for live development
+    #   - ../llm-access-service/frontend:/app
 
+  # Backend Service (FastAPI)
+  backend:
+    build:
+      context: ../llm-access-service/backend # Path to your backend directory
+      dockerfile: Dockerfile.backend # Assuming you have a Dockerfile for your backend
+    ports:
+      - "8000:8000" # Map host port 8000 to container port 8000
+    environment:
+      # Load backend environment variables from the backend's .env file
+      - FIREBASE_ADMIN_SDK_SERVICE_ACCOUNT_KEY_PATH=${FIREBASE_ADMIN_SDK_SERVICE_ACCOUNT_KEY_PATH}
+      - LITELLM_INTERNAL_API_KEY=${LITELLM_MASTER_KEY} # Use the master key to talk to LiteLLM
+      - LITELLM_INTERNAL_API_URL=http://litellm:4000 # Communicate with LiteLLM via its service name
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_HOST=db # Communicate with the database via its service name
+    # Mount the service account key file into the container
+    # Ensure the path on the host matches the path referenced in backend/.env
+    volumes:
+      - ./serviceAccountKey.json:/app/path/to/your/serviceAccountKey.json # REPLACE HOST PATH AND CONTAINER PATH
+      - ../llm-access-service/backend:/app # Mount backend code for development/easier updates
+    command: uvicorn api_backend:app --reload --host 0.0.0.0 --port 8000 # Command to run your FastAPI app
+    depends_on:
+      - litellm # Backend depends on LiteLLM being up
+
+  # LiteLLM Proxy Service
+  litellm:
+    image: ghcr.io/berriai/litellm:main # Use the latest LiteLLM image
+    ports:
+      - "4000:4000" # Expose LiteLLM's API port
+    environment:
+      # Pass necessary environment variables to LiteLLM
+      - OPENAI_API_KEY=YOUR_OPENAI_API_KEY # REPLACE THIS with your actual OpenAI API key
+      - DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY # REPLACE THIS with your actual DeepSeek API key
+      # Define your models and their providers.
+      # litellm supports many models; list the ones you want to use.
+      - MODEL=gpt-4o,deepseek-r1
+      - REDIS_HOST=redis # Use the redis service name
+      - REDIS_PORT=6379
+      - MASTER_KEY=${LITELLM_MASTER_KEY} # Use the master key from the root .env
+      - PROXY_PORT=4000
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB} # Connect to the database service
+      # Enable LiteLLM to log requests to the database
+      - DB=postgresql
+      - SUCCESS_CALLBACK=postgres
+      - FAILURE_CALLBACK=postgres
+    command: ["litellm", "--config", "/app/config.yaml"] # Assuming you have a LiteLLM config file
+    volumes:
+      # Mount a LiteLLM config file if you have one for more complex setups
+      # - ./litellm_config.yaml:/app/config.yaml
+    depends_on:
+      - db # LiteLLM depends on the database being up
+      - redis # LiteLLM depends on Redis for rate limiting/caching (optional but good practice)
+
+  # Database Service (PostgreSQL)
+  db:
+    image: postgres:13 # Use a stable PostgreSQL image
+    ports:
+      - "5432:5432" # Expose database port (optional, mainly for debugging)
+    environment:
+      # Set database credentials from the root .env file
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      # Persist database data to avoid losing data when the container restarts
+      - postgres_data:/var/lib/postgresql/data
+
+  # Redis Service (for LiteLLM caching/rate limiting)
+  redis:
+    image: redis:latest # Use the latest Redis image
+    ports:
+      - "6379:6379" # Expose Redis port (optional)
+    volumes:
+      # Persist Redis data (optional but recommended)
+      - redis_data:/data
+
+# Define named volumes for data persistence
 volumes:
-  db_data:
+  postgres_data:
+  redis_data:
