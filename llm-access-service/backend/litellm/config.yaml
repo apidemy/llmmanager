@@ -1,0 +1,17 @@
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: deepseek-r1
+    litellm_params:
+      model: novita/deepseek/deepseek-r1
+      api_key: os.environ/DEEPSEEK_API_KEY
+general_settings:
+  database_type: postgres
+  database_args:
+    user: postgres
+    password: mysecretpassword
+    host: db
+    port: 5432
+    database: litellm
